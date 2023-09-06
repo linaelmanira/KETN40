@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Sep  6 13:26:19 2023
+
+@author: linaelmanira
+"""
+
+
+import numpy as np
+from scipy.integrate import solve_ivp
+import matplotlib.pyplot as plt
+import FVMtools as fvm
+import time
+
+from scipy.optimize import curve_fit
+import pandas as pd
+
+plt.close('all')
+
+
+D = {}
+D['ec'] = 0.45 
+D['ep'] = 0.57
+D['L'] = 10 #cm 
+D['Pe'] = 0.5 
+D['R'] = 30e-4/2 #cm
+D['v'] = 4*60 #cm/h
+D['Dax'] = 1.80000089
+#D['Dax'] = 2*D['R']*D['v']/D['Pe'] #cm/h
+D['Pe'] = 2*D['R']*D['v']/D['Dax']
+D['H0A'] = 0.5e-4 
+D['H0B'] = 7.5e-04
+D['H0C'] = 2.6e-4 
+D['H0D'] = 7.5e-4
+D['BA'] = 4.37
+D['BB'] = 5.17
+D['BC'] = 5.14
+D['BD'] = 5.93
+D['qmax'] =70 #g/l
+D['kinA'] = 1000 #/h
+D['kinB'] = 500 #/h
+D['kinC'] = 300 #/h
+D['kinD'] = 600 #/h
+D['F'] = 30  #CV/h
+D['CAin'] = 0.299*3.84 #g/l
+D['CBin'] = 0.535*3.84 #g/l
+D['CCin'] = 0.061*3.84 #g/l
+D['CDin'] = 0.105*3.84 #g/l
+D['CAbuff'] = 0.05
+D['CBbuff'] = 0.25
+D['ee'] = D['ec'] + (1-D['ec'])* D['ep']
+D['k'] = 3.60000029 #enhet????
+D['D'] = 0.0631561 #cm^2/h
+D['Deff'] = D['D']/D['ep']
+D['t'] = 1
+
+D['ee'] = D['ec'] + (1-D['ec'])* D['ep']
+
+#mesh
+D['N'] = 35
+D['h'] = D['L']/D['N']
+    
+[A1, A1f] = fvm.FVMdisc1st(D['N'], D['h'], '2pb')
+[A2,A2f] = fvm.FVMdisc2nd(D['N'], D['h'], '3pc')
+[B1,B0] = fvm.FVMdiscBV(D['N'], D['h'], [0, 1], [[1, -1], [0, 0]])
+     
+
+excelFile = 'Project2A_appendix.xlsx'
+df = pd.read_excel(excelFile, sheet_name='grad')
+CVdata = df['V2'].to_numpy()
+Tdata = (CVdata+0.2505)/D['F']
+Sdata = df['Cs2'].to_numpy()
+Cdata = df['UV2'].to_numpy()
+print(Tdata.shape)
+print(CVdata.shape)
+print(Sdata.shape)
+print(Cdata.shape)
+
+[A1, A1f] = fvm.FVMdisc1st(D['N'], D['h'], '2pb')
+[A2,A2f] = fvm.FVMdisc2nd(D['N'], D['h'], '3pc')
+[B1,B0] = fvm.FVMdiscBV(D['N'], D['h'], [0, 1], [[1, -1], [0, 0]])
+
+
+def estim(D,CVdata,Cdata):
+    
+    guess = np.array([0.6e-4])
+    concdata = np.hstack((Cdata))
+    
+    lb = np.array([0])
+    ub = np.array([np.inf])
+    est, pcov = curve_fit(lambda Tdata,H0A: adssim(Tdata,H0A), Tdata,\
+                           concdata,guess,bounds = (lb,ub))
+    
+    mod = adssim(Tdata,*est)
+    
+    resC = Cdata-mod
+    
+    QC = np.sum(resC**2)
+   
+    
+    stdC = np.sqrt(QC/(len(Tdata)-1))
+    
+    
+    
+    return est, stdC
+
+
+
+def adssim(Tdata,H0A):
+
+
+    # init
+    yinit = np.hstack(( np.zeros(4*D['N']),D['CAbuff']*np.ones(D['N']), np.zeros(4*D['N']) ))
+    tspan = [0,2]
+    JP = fvm.FVMjpattern(lambda t,y: adsmodel(Tdata,y,D,H0A),len(yinit))
+    # solve
+    sol = solve_ivp(lambda t, y: adsmodel(Tdata,y,D,H0A),\
+                    tspan, yinit, method = 'BDF', jac_sparsity=JP)
+    t = sol.t
+    y = sol.y.T
+    CV = D['F']*t-0.20267517547749653
+
+    # plot
+    cA = y[:, :D['N']]
+    cA = cA[:,-1]
+    cB = y[:,D['N']:2*D['N']]
+    cB = cB[:,-1]
+    cC = y[:,2*D['N']:3*D['N']]
+    cC = cC[:,-1]
+    cD = y[:,3*D['N']:4*D['N']]
+    cD = cD[:,-1]
+    s = y[:,4*D['N']:5*D['N']]
+    s = s[:,-1]
+    
+    ctot = cA+cB+cC+cD
+    
+    return ctot
+    
+
+    excelFile = 'Project2A_appendix.xlsx'
+    df = pd.read_excel(excelFile, sheet_name='grad')
+    
+    cv2 = df['V2'].to_numpy()
+    cs2 = df['Cs2'].to_numpy()
+    uv2 = df['UV2'].to_numpy()
+    
+    fig,ax = plt.subplots()
+    plt.title('Dispersion model')
+    ax.plot(CV, cA,label='cA')
+    ax.plot(CV,cB,label = 'cB')
+    ax.plot(CV,cC,label = 'cC')
+    ax.plot(CV,cD,label = 'cD')
+    ax.plot(cv2, uv2,':',label='Experimental chromatogram')
+    plt.legend(loc='upper center')
+    ax2 = ax.twinx()
+    ax2.plot(CV, s,label='s')
+    ax2.plot(cv2, cs2,':',label='Experimental gradient')
+    plt.legend(loc='center')
+    ax.set_xlabel('CV')
+    ax.set_ylabel('Peptide concentration (g/l)')
+    ax2.set_ylabel('Salt concentration (M)')
+    plt.tight_layout()
+    
+
+def adsmodel(t, y, D, H0A):
+    
+    N=D['N']
+    cA = y[:N]
+    cB = y[N:2*N]
+    cC = y[2*N:3*N]
+    cD = y[3*N:4*N]
+    s = y[4*N:5*N]
+    qA = y[5*N:6*N]
+    qB = y[6*N:7*N]
+    qC = y[7*N:8*N]
+    qD =y[8*N:9*N]
+    
+    for i in t:
+        if i<0.2505/D['F']:
+            sin = D['CAbuff']
+        elif i<1.2505/D['F']:
+            sin=D['CAbuff']
+        elif i<51.2505/D['F']:
+            sin = (0.9-0.5*30*t/50)*D['CAbuff']+D['CBbuff']*(1-(0.9-0.5*30*t/50))
+        else:
+            sin = 1*D['CBbuff']
+        
+        if i<0.2505/D['F']:
+            CAin = D['CAin']
+            CBin = D['CBin']
+            CCin = D['CCin']
+            CDin = D['CDin']
+    
+        else:
+            CAin = 0 
+            CBin = 0 
+            CCin = 0 
+            CDin = 0 
+        
+    
+    HA = (H0A*(s**-D['BA']))
+    HB = (D['H0B']*(s**-D['BB']))
+    HC = (D['H0C']*(s**-D['BC']))
+    HD = (D['H0D']*(s**-D['BD']))
+
+    radsA = D['kinA']*(HA*cA*(1-1/D['qmax']*(qA+qB+qC+qD))-qA)
+    radsB = D['kinB']*(HB*cB*(1-1/D['qmax']*(qA+qB+qC+qD))-qB)
+    radsC = D['kinC']*(HC*cC*(1-1/D['qmax']*(qA+qB+qC+qD))-qC)
+    radsD = D['kinD']*(HD*cD*(1-1/D['qmax']*(qA+qB+qC+qD))-qD)
+    
+  
+    # Derivatives
+    dcAdt = D['Dax']*(A2@cA + A2f@(B1@cA + B0*CAin)) \
+        - D['v']/D['ee']*(A1@cA + A1f@(B1@cA + B0*CAin)) \
+        - (1-D['ec'])/D['ee']*radsA
+        
+    dcBdt = D['Dax']*(A2@cB + A2f@(B1@cB + B0*CBin)) \
+        - D['v']/D['ee']*(A1@cB + A1f@(B1@cB + B0*CBin)) \
+        - (1-D['ec'])/D['ee']*radsB
+        
+    dcCdt = D['Dax']*(A2@cC + A2f@(B1@cC + B0*CCin)) \
+        - D['v']/D['ee']*(A1@cC + A1f@(B1@cC + B0*CCin)) \
+        - (1-D['ec'])/D['ee']*radsC
+        
+    dcDdt = D['Dax']*(A2@cD + A2f@(B1@cD + B0*CDin)) \
+        - D['v']/D['ee']*(A1@cD + A1f@(B1@cD + B0*CDin)) \
+        - (1-D['ec'])/D['ee']*radsD
+        
+    dsdt = D['Dax']*(A2@s + A2f@(B1@s + B0*sin)) \
+         - D['v']/D['ee']*(A1@s + A1f@(B1@s + B0*sin))
+
+    # Output
+    dqAdt = radsA
+    dqBdt = radsB
+    dqCdt = radsC
+    dqDdt = radsD
+    dydt = np.hstack((dcAdt,dcBdt,dcCdt,dcDdt,dsdt,dqAdt,dqBdt,dqCdt,dqDdt))
+
+    return dydt
+
+est, stdC = estim(D,CVdata,Cdata)
+
+print(est)
+    
